@@ -1,4 +1,4 @@
-# Private Tunnel Proxy V3
+# Private Tunnel Proxy
 
 یک **HTTP/HTTPS و SOCKS5 Proxy خصوصی مبتنی بر .NET** که بدون نیاز به VPS، از یک ASP.NET Core Web App به‌عنوان Remote Tunnel Server استفاده می‌کند.
 
@@ -313,7 +313,7 @@ https://YOUR-DOMAIN/health
 باید ببینید:
 
 ```
-Private Tunnel Proxy V3
+Private Tunnel Proxy 
 
 HTTP  : 127.0.0.1:8888
 HTTPS : 127.0.0.1:8888
@@ -828,7 +828,7 @@ Run the local proxy application.
 You should see:
 
 ```
-Private Tunnel Proxy V3
+Private Tunnel Proxy 
 
 HTTP  : 127.0.0.1:8888
 HTTPS : 127.0.0.1:8888
