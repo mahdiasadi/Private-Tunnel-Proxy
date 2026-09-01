@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="../ProxyClientTest/ProxyClientTest.csproj" />
+  <Project Path="../ProxyTest/ProxyTest/ProxyHost.csproj" />
+  <Project Path="LocalProxyServer.csproj" />
+</Solution>
