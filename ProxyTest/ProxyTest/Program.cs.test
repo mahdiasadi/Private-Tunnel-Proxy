@@ -1,0 +1,244 @@
+﻿using System.Net;
+using System.Net.Sockets;
+using System.Net.WebSockets;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddHttpClient();
+
+var app = builder.Build();
+
+app.MapGet("/", () => Results.Ok(new
+{
+    success = true,
+    message = "Proxy test server is running"
+}));
+
+app.MapGet("/fetch", async (
+    string url,
+    IHttpClientFactory factory) =>
+{
+    if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+    {
+        return Results.BadRequest(new
+        {
+            success = false,
+            message = "Invalid URL"
+        });
+    }
+
+    if (uri.Scheme != Uri.UriSchemeHttp &&
+        uri.Scheme != Uri.UriSchemeHttps)
+    {
+        return Results.BadRequest(new
+        {
+            success = false,
+            message = "Only HTTP and HTTPS are allowed"
+        });
+    }
+
+    try
+    {
+        var client = factory.CreateClient();
+
+        client.Timeout = TimeSpan.FromSeconds(15);
+
+        using var response = await client.GetAsync(
+            uri,
+            HttpCompletionOption.ResponseHeadersRead);
+
+        var content = await response.Content.ReadAsStringAsync();
+
+        return Results.Content(
+            content,
+            response.Content.Headers.ContentType?.ToString()
+                ?? "text/plain",
+            System.Text.Encoding.UTF8,
+            (int)response.StatusCode);
+    }
+    catch (Exception ex)
+    {
+        return Results.Ok(new
+        {
+            success = false,
+            error = ex.GetType().Name,
+            message = ex.Message
+        });
+    }
+});
+app.MapGet("/proxy", async (
+    string url,
+    IHttpClientFactory factory) =>
+{
+    if (!Uri.TryCreate(url, UriKind.Absolute, out var target))
+        return Results.BadRequest("Invalid URL");
+
+    if (target.Scheme != "http" &&
+        target.Scheme != "https")
+        return Results.BadRequest("Only HTTP/HTTPS allowed");
+
+    try
+    {
+        var client = factory.CreateClient();
+
+        client.Timeout = TimeSpan.FromSeconds(20);
+
+        using var response = await client.GetAsync(target);
+
+        var body = await response.Content.ReadAsStringAsync();
+
+        return Results.Content(
+            body,
+            response.Content.Headers.ContentType?.ToString()
+                ?? "text/plain",
+            System.Text.Encoding.UTF8,
+            (int)response.StatusCode);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(ex.Message);
+    }
+});
+app.Map("/tunnel", async context =>
+{
+    if (!context.WebSockets.IsWebSocketRequest)
+    {
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsync("WebSocket required");
+        return;
+    }
+
+    var target = context.Request.Query["target"].ToString();
+
+    if (string.IsNullOrWhiteSpace(target))
+    {
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsync("Target required");
+        return;
+    }
+
+    var parts = target.Split(':');
+
+    if (parts.Length != 2 ||
+        !int.TryParse(parts[1], out var port))
+    {
+        context.Response.StatusCode = 400;
+        await context.Response.WriteAsync("Target must be host:port");
+        return;
+    }
+
+    var host = parts[0];
+
+    // فعلاً فقط برای تست
+    if (host != "httpbin.org" &&
+        host != "example.com")
+    {
+        context.Response.StatusCode = 403;
+        await context.Response.WriteAsync("Target not allowed");
+        return;
+    }
+
+    using var tcp = new TcpClient();
+
+    try
+    {
+        await tcp.ConnectAsync(host, port);
+
+        using var socket =
+            await context.WebSockets.AcceptWebSocketAsync();
+
+        using var network = tcp.GetStream();
+
+        var clientToServer = Task.Run(async () =>
+        {
+            var buffer = new byte[16 * 1024];
+
+            while (socket.State == WebSocketState.Open)
+            {
+                var result = await socket.ReceiveAsync(
+                    buffer,
+                    CancellationToken.None);
+
+                if (result.MessageType ==
+                    WebSocketMessageType.Close)
+                    break;
+
+                await network.WriteAsync(
+                    buffer.AsMemory(
+                        0,
+                        result.Count));
+            }
+        });
+
+        var serverToClient = Task.Run(async () =>
+        {
+            var buffer = new byte[16 * 1024];
+
+            while (socket.State == WebSocketState.Open)
+            {
+                var count = await network.ReadAsync(buffer);
+
+                if (count == 0)
+                    break;
+
+                await socket.SendAsync(
+                    buffer.AsMemory(0, count),
+                    WebSocketMessageType.Binary,
+                    true,
+                    CancellationToken.None);
+            }
+        });
+
+        await Task.WhenAny(
+            clientToServer,
+            serverToClient);
+
+        try
+        {
+            await socket.CloseAsync(
+                WebSocketCloseStatus.NormalClosure,
+                "Closed",
+                CancellationToken.None);
+        }
+        catch
+        {
+        }
+    }
+    catch (Exception ex)
+    {
+        if (!context.Response.HasStarted)
+        {
+            context.Response.StatusCode = 502;
+            await context.Response.WriteAsync(ex.Message);
+        }
+    }
+});
+app.MapGet("/stream-test", async context =>
+{
+    context.Response.ContentType = "text/plain";
+
+    for (int i = 1; i <= 10; i++)
+    {
+        await context.Response.WriteAsync(
+            $"DATA-{i}\n");
+
+        await context.Response.Body.FlushAsync();
+
+        await Task.Delay(1000);
+    }
+});
+app.MapPost("/echo-stream", async context =>
+{
+    context.Response.ContentType = "text/plain";
+
+    using var reader = new StreamReader(
+        context.Request.Body);
+
+    var text = await reader.ReadToEndAsync();
+
+    await context.Response.WriteAsync(
+        $"SERVER RECEIVED: {text}");
+
+    await context.Response.Body.FlushAsync();
+});
+app.Run();
